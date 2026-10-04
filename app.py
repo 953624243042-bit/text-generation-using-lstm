@@ -1,6 +1,11 @@
 
 import json
 import pickle
+import zipfile
+import shutil
+import tempfile
+from pathlib import Path
+
 import numpy as np
 import streamlit as st
 import tensorflow as tf
@@ -12,16 +17,48 @@ st.set_page_config(
     layout="centered"
 )
 
+BASE_DIR = Path(__file__).parent
+MODEL_NAME = "news_text_generation_lstm.keras"
+ZIP_PATH = BASE_DIR / "model_backup.zip"
+
+
 @st.cache_resource
 def load_files():
-    model = tf.keras.models.load_model(
-        "news_text_generation_lstm.keras"
-    )
+    model_path = BASE_DIR / MODEL_NAME
 
-    with open("tokenizer.pkl", "rb") as file:
+    # If the model file is missing, extract it from the ZIP
+    if not model_path.exists():
+        if not ZIP_PATH.exists():
+            raise FileNotFoundError(
+                "Neither the model file nor model_backup.zip was found."
+            )
+
+        with zipfile.ZipFile(ZIP_PATH, "r") as archive:
+            model_files = [
+                name for name in archive.namelist()
+                if name.lower().endswith(".keras")
+                and not name.startswith("__MACOSX/")
+            ]
+
+            if not model_files:
+                raise FileNotFoundError(
+                    "No .keras model file was found inside model_backup.zip."
+                )
+
+            # Copy the model from the ZIP to a temporary location
+            temp_dir = Path(tempfile.gettempdir())
+            model_path = temp_dir / MODEL_NAME
+
+            with archive.open(model_files[0]) as source:
+                with open(model_path, "wb") as destination:
+                    shutil.copyfileobj(source, destination)
+
+    model = tf.keras.models.load_model(str(model_path))
+
+    with open(BASE_DIR / "tokenizer.pkl", "rb") as file:
         tokenizer = pickle.load(file)
 
-    with open("config.json", "r") as file:
+    with open(BASE_DIR / "config.json", "r", encoding="utf-8") as file:
         config = json.load(file)
 
     return model, tokenizer, config
@@ -72,7 +109,6 @@ try:
                         token_list, verbose=0
                     )[0]
 
-                    # Ignore padding and OOV tokens
                     prediction[0] = 0
                     if len(prediction) > 1:
                         prediction[1] = 0
@@ -100,7 +136,6 @@ try:
 except Exception as error:
     st.error(
         "The model files could not be loaded. "
-        "Check that the model, tokenizer and config files "
-        "are uploaded correctly."
+        "Please check the model ZIP, tokenizer and config files."
     )
     st.caption(f"Error details: {error}")
